@@ -22,11 +22,13 @@ You ──▶ Claude Code ──/cursor:delegate──▶ cursor-agent (backgrou
 ```
 
 - 🚀 **Background handoff** — fire a task, keep working; Claude polls and reports.
-- 📊 **Live progress** — watch a running job's activity, tool calls, and changed files as it works.
-- 📋 **Job tracking** — `status` / `result` / `cancel` across every repo.
-- 🔁 **Resumable** — continue a Cursor session with new instructions.
+- 📊 **Live progress** — watch a running job's activity, tool calls, changed files, tokens, and cost as it works.
+- 🔔 **Completion-aware** — a Stop hook tells Claude (and pings your desktop) the moment a background job finishes — no polling.
+- 🔍 **Reviewable** — `/cursor:diff <id>` shows the git diff of exactly what a job changed.
+- 🔁 **Resumable + self-healing** — continue a session with new instructions, or `--retry N` to auto-resume on crash.
+- 📈 **Statusline** — optional one-line ambient summary of active jobs.
 - 🤖 **Self-rescue** — a `cursor-rescue` subagent Claude can invoke when stuck.
-- 🧪 **Tested** — 55 mocked tests + opt-in live smoke test, CI on every push.
+- 🧪 **Tested** — 84 mocked tests + opt-in live smoke test, CI on every push.
 
 ---
 
@@ -92,12 +94,17 @@ Verify everything is wired up:
 /cursor:status
 /cursor:status <id>      # activity timeline, tool calls, changed files, elapsed
 
-# 3. Read the result once it's done
+# 3. Read the result once it's done (shows tokens + cost)
 /cursor:result <id>
 
-# 4. Iterate on the same Cursor session
+# 4. Review exactly what changed
+/cursor:diff <id>
+
+# 5. Iterate on the same Cursor session
 /cursor:resume <id> now wire it into the login route
 ```
+
+When a background job finishes, a Stop hook surfaces it to Claude automatically and fires a desktop notification — you don't have to keep checking `status`.
 
 Job ids accept a **unique prefix** — `/cursor:result 1718` works if it's unambiguous.
 
@@ -108,15 +115,31 @@ Job ids accept a **unique prefix** — `/cursor:result 1718` works if it's unamb
 | Command | What it does |
 |---------|--------------|
 | `/cursor:delegate <task>` | Hand a task to cursor-agent as a background job. Prints a job id. |
-| `/cursor:status [id]` | List jobs, or pass an id for a live card (activity, tool calls, changed files, elapsed). Prunes finished jobs older than 7 days. |
-| `/cursor:result <id>` | Show a finished job's output + session id. `--json` for raw. |
+| `/cursor:status [id]` | List jobs, or pass an id for a live card (activity, tool calls, changed files, tokens, cost, elapsed). Prunes finished jobs older than 7 days. |
+| `/cursor:result <id>` | Show a finished job's output, token/cost usage, and session id. `--json` for raw. |
+| `/cursor:diff <id>` | Show the git diff of what a job changed (`--stat` for a summary). |
 | `/cursor:cancel <id>` | Stop a running job. |
 | `/cursor:resume <id> <new instructions>` | Continue a job's session as a new job. |
 | `/cursor:setup` | Verify cursor-agent install, auth, version, jq. |
 
-**Flags** on `delegate` / `resume`: `--model <m>` (override model), `--worktree` (isolate edits in a throwaway git worktree).
+**Flags** on `delegate` / `resume`: `--model <m>` (override model), `--retry <n>` (auto-resume on crash/failure up to n times), `--worktree` (isolate edits in a throwaway git worktree, `delegate` only).
 
 A `cursor-rescue` subagent ships alongside, so Claude can self-delegate when it gets stuck.
+
+### Completion notifications
+
+A bundled `Stop`/`SubagentStop` hook scans for background jobs that finished since the last turn and feeds a one-line summary back to Claude as context — so Claude reacts to completions on its own. It also fires a best-effort desktop notification (macOS `osascript` / Linux `notify-send`). Tune or disable via env (see [Configuration](#configuration)).
+
+### Statusline (optional)
+
+Show active jobs in your Claude Code statusline — e.g. `◐ 2 cursor · 3m 12s`, empty when idle. Add to your `settings.json`, pointing at the installed plugin path:
+
+```json
+"statusLine": {
+  "type": "command",
+  "command": "~/.claude/plugins/marketplaces/akash-viven/plugins/cursor/scripts/statusline.sh"
+}
+```
 
 ---
 
@@ -129,13 +152,14 @@ cursor-agent -p "<task>" --output-format stream-json \
   --force --trust --sandbox disabled --workspace "$PWD"
 ```
 
-…detached, streaming NDJSON events to `output.json` as it works. `/cursor:status <id>` parses that live stream on demand — no daemon, no polling loop — to show the model, elapsed time, recent activity, tool calls, and changed files. When the job exits, the wrapper reads the final `result` event (`.result`, `.session_id`, `.is_error`, `.duration_ms`) into per-job files.
+…detached, streaming NDJSON events to `output.json` as it works. `/cursor:status <id>` parses that live stream on demand — no daemon, no polling loop — to show the model, elapsed time, recent activity, tool calls, changed files, and running token/cost usage. When the job exits, the wrapper reads the final `result` event (`.result`, `.session_id`, `.is_error`, `.duration_ms`, `.usage`) into per-job files. With `--retry N`, a failed or crashed run is re-attempted — resuming the captured session so the agent continues rather than restarting cold.
 
 Job state lives in `~/.cursor-plugin/jobs/<id>/`:
 
 ```
-cwd  prompt  model  started  status  pid  output.json
-result.txt  session_id  duration_ms  exit_code  err.log
+cwd  prompt  model  started  status  pid  output.json  exit_code  err.log
+result.txt  session_id  duration_ms  tokens_in  tokens_out  cost_usd
+retry_max  attempts  announced
 ```
 
 `status` is one of:
@@ -144,7 +168,7 @@ result.txt  session_id  duration_ms  exit_code  err.log
 |--------|---------|
 | `running` | Job in flight |
 | `done` | Finished successfully |
-| `failed` | Agent reported an error |
+| `failed` | Agent reported an error (after exhausting `--retry`, if set) |
 | `cancelled` | Stopped via `/cursor:cancel` |
 | `crashed` | PID died before writing a terminal status |
 
@@ -170,6 +194,8 @@ Environment variables (all optional):
 | `CURSOR_PLUGIN_HOME` | `~/.cursor-plugin` | Job store root |
 | `CURSOR_AGENT_BIN` | `cursor-agent` | Binary to drive |
 | `CURSOR_PLUGIN_PRUNE_DAYS` | `7` | Auto-prune finished jobs older than N days (`0` = off) |
+| `CURSOR_PLUGIN_NOTIFY_WINDOW_MIN` | `30` | Completion hook ignores jobs that finished more than N minutes ago (prevents replaying old jobs) |
+| `CURSOR_PLUGIN_NOTIFY_DESKTOP` | `1` | Set `0` to suppress the desktop notification |
 | `CURSOR_API_KEY` | — | Non-interactive auth for cursor-agent |
 
 ---
@@ -179,7 +205,7 @@ Environment variables (all optional):
 Pure-bash harness with a mocked `cursor-agent` — no quota used:
 
 ```bash
-tests/run.sh                 # 55 unit + integration tests
+tests/run.sh                 # 84 unit + integration tests
 CURSOR_LIVE=1 tests/run.sh   # also runs one real cursor-agent smoke test
 ```
 

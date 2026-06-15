@@ -46,6 +46,8 @@ print_card() {
   printf '  %s  %s\n' "$(dim 'model  ')" "$model"
   [ -n "$session" ] && printf '  %s  %s\n' "$(dim 'session')" "$session"
   printf '  %s  %s\n' "$(dim 'tools  ')" "$tools calls"
+  local usage; usage="$(job_usage_line "$id")"
+  [ -n "$usage" ] && printf '  %s  %s\n' "$(dim 'usage  ')" "$usage"
 
   local act; act="$(job_activity "$id" 6)"
   if [ -n "$act" ]; then

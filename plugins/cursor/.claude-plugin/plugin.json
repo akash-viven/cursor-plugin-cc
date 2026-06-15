@@ -1,6 +1,6 @@
 {
   "name": "cursor",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Hand off coding tasks from Claude Code to the Cursor CLI (cursor-agent) as tracked background jobs.",
   "author": {
     "name": "Akash Solanki"

@@ -31,15 +31,20 @@ fi
 icon="$(status_icon "$st")"
 el="$(fmt_elapsed "$(job_elapsed "$id")")"
 model="$(job_model "$id")"
+usage="$(job_usage_line "$id")"
+meta="$el · $model"
+[ -n "$usage" ] && meta="$meta · $usage"
+attempts="$(job_field "$id" attempts)"
+case "$attempts" in ''|0|1) ;; *) meta="$meta · ${attempts} attempts";; esac
 
 printf '\n'
-printf '  %s %s   %s\n' "$icon" "$(status_color "$st")" "$(dim "$el · $model")"
+printf '  %s %s   %s\n' "$icon" "$(status_color "$st")" "$(dim "$meta")"
 printf '  %s\n' "$(job_field "$id" prompt | tr '\n' ' ')"
 
 # What it touched, before the prose result.
 files="$(job_changed_files "$id")"
 if [ -n "$files" ]; then
-  printf '\n  %s\n' "$(bold 'changed files')"
+  printf '\n  %s   %s\n' "$(bold 'changed files')" "$(dim "/cursor:diff ${id:0:8} to review")"
   printf '%s\n' "$files" | while IFS= read -r f; do printf '  %s %s\n' "$(c 32 '+')" "$f"; done
 fi
 

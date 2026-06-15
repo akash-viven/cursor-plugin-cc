@@ -115,6 +115,13 @@ ID="$(cd "$WORK" && MOCK_STREAM=1 MOCK_MODEL="Composer 2.5 Fast" MOCK_FILE="src/
 assert_eq "stream status=done"     "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/status")" "done"
 assert_eq "stream result parsed"   "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/result.txt")" "refactored"
 assert_eq "duration_ms captured"   "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/duration_ms")" "1234"
+assert_eq "tokens_in captured"     "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/tokens_in")"  "1200"
+assert_eq "tokens_out captured"    "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/tokens_out")" "340"
+assert_eq "cost captured"          "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/cost_usd")"   "0.0123"
+assert_contains "usage line tokens" "$( . "$SCRIPTS/lib.sh"; job_usage_line "$ID")" "1.2k"
+assert_contains "usage line cost"   "$( . "$SCRIPTS/lib.sh"; job_usage_line "$ID")" "0.0123"
+assert_contains "result shows usage" "$("$SCRIPTS/result.sh" "$ID")" "1.2k"
+assert_contains "status card usage"  "$("$SCRIPTS/status.sh" "$ID")" "tok"
 assert_eq "model from init event"  "$( . "$SCRIPTS/lib.sh"; job_model "$ID")" "Composer 2.5 Fast"
 assert_eq "session from init/file" "$( . "$SCRIPTS/lib.sh"; job_session "$ID")" "sess-rich"
 assert_eq "tool count = 2"         "$( . "$SCRIPTS/lib.sh"; job_tool_count "$ID")" "2"
@@ -133,6 +140,80 @@ assert_eq "fmt 45s"      "$( . "$SCRIPTS/lib.sh"; fmt_elapsed 45)"   "45s"
 assert_eq "fmt 1m 23s"   "$( . "$SCRIPTS/lib.sh"; fmt_elapsed 83)"   "1m 23s"
 assert_eq "fmt 2h 4m"    "$( . "$SCRIPTS/lib.sh"; fmt_elapsed 7440)" "2h 4m"
 assert_eq "elapsed from duration" "$( . "$SCRIPTS/lib.sh"; job_elapsed "$ID")" "1"
+
+echo "== fmt_tokens =="
+assert_eq "fmt 940"   "$( . "$SCRIPTS/lib.sh"; fmt_tokens 940)"     "940"
+assert_eq "fmt 1234"  "$( . "$SCRIPTS/lib.sh"; fmt_tokens 1234)"    "1.2k"
+assert_eq "fmt 2.3M"  "$( . "$SCRIPTS/lib.sh"; fmt_tokens 2300000)" "2.3M"
+
+echo "== retry: fails then resumes to success =="
+reset_store
+CNT="$SANDBOX/retrycount.txt"; : > "$CNT"
+RARGS="$SANDBOX/retryargs.txt"; : > "$RARGS"
+ID="$(cd "$WORK" && MOCK_STREAM=1 MOCK_FAIL_TIMES=1 MOCK_COUNT_FILE="$CNT" \
+  MOCK_ARGS_FILE="$RARGS" MOCK_SESSION="retry-sess" MOCK_RESULT="ok after retry" \
+  "$SCRIPTS/delegate.sh" --foreground --retry 2 -- "flaky task")"
+assert_eq "retry reaches done"     "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/status")" "done"
+assert_eq "retry attempts = 2"     "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/attempts")" "2"
+assert_eq "retry final result"     "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/result.txt")" "ok after retry"
+assert_contains "retry resumes session" "$(cat "$RARGS")" "retry-sess"
+assert_contains "result shows attempts" "$("$SCRIPTS/result.sh" "$ID")" "2 attempts"
+
+echo "== retry: exhausted stays failed =="
+reset_store
+CNT="$SANDBOX/retrycount2.txt"; : > "$CNT"
+ID="$(cd "$WORK" && MOCK_STREAM=1 MOCK_FAIL_TIMES=5 MOCK_COUNT_FILE="$CNT" \
+  "$SCRIPTS/delegate.sh" --foreground --retry 1 -- "always fails")"
+assert_eq "exhausted -> failed"    "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/status")" "failed"
+assert_eq "exhausted attempts = 2" "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/attempts")" "2"
+
+echo "== diff: git diff of changed files =="
+reset_store
+GR="$SANDBOX/gitrepo"; rm -rf "$GR"; mkdir -p "$GR"
+( cd "$GR" && git init -q && git config user.email t@t.t && git config user.name t \
+  && printf 'export const x = 1\n' > tracked.ts && git add . && git commit -qm init )
+ID="$(cd "$GR" && MOCK_STREAM=1 MOCK_FILE="tracked.ts" "$SCRIPTS/delegate.sh" --foreground -- "edit tracked")"
+printf 'export const x = 2  // changed\n' > "$GR/tracked.ts"
+DOUT="$("$SCRIPTS/diff.sh" "$ID" 2>&1)"
+assert_contains "diff names file"   "$DOUT" "tracked.ts"
+assert_contains "diff shows change" "$DOUT" "changed"
+SOUT="$("$SCRIPTS/diff.sh" "$ID" --stat 2>&1)"
+assert_contains "diff --stat works" "$SOUT" "tracked.ts"
+echo "== diff: non-git errors =="
+reset_store
+ID="$(cd "$WORK" && MOCK_STREAM=1 MOCK_FILE="x.ts" "$SCRIPTS/delegate.sh" --foreground -- "edit")"
+"$SCRIPTS/diff.sh" "$ID" 2>&1 | grep -q "not a git repository" && ok "diff non-git errors" || bad "diff non-git errors"
+
+echo "== statusline: running vs idle =="
+reset_store
+ID="$(cd "$WORK" && MOCK_SLEEP=5 "$SCRIPTS/delegate.sh" -- "long one")"
+sleep 0.3
+SL="$(printf '{}' | "$SCRIPTS/statusline.sh" 2>/dev/null)"
+assert_contains "statusline shows running" "$SL" "cursor"
+"$SCRIPTS/cancel.sh" "$ID" >/dev/null 2>&1 || true
+reset_store
+SL_IDLE="$(printf '{}' | "$SCRIPTS/statusline.sh" 2>/dev/null)"
+assert_eq "statusline idle is empty" "$SL_IDLE" ""
+
+echo "== hook: announces newly-finished jobs =="
+reset_store
+HOOK="$ROOT/plugins/cursor/hooks/notify-done.sh"
+ID="$(cd "$WORK" && MOCK_STREAM=1 MOCK_RESULT="hooked" "$SCRIPTS/delegate.sh" --foreground -- "hook task")"
+HIN='{"hook_event_name":"Stop","session_id":"s","cwd":"'"$WORK"'"}'
+HOUT="$(printf '%s' "$HIN" | CURSOR_PLUGIN_NOTIFY_DESKTOP=0 "$HOOK" 2>/dev/null)"
+assert_contains "hook emits additionalContext" "$HOUT" "additionalContext"
+assert_contains "hook names the job"            "$HOUT" "${ID:0:8}"
+assert_contains "hook echoes event name"        "$HOUT" "Stop"
+assert_file "hook writes announced marker" "$CURSOR_PLUGIN_HOME/jobs/$ID/announced"
+HOUT2="$(printf '%s' "$HIN" | CURSOR_PLUGIN_NOTIFY_DESKTOP=0 "$HOOK" 2>/dev/null)"
+assert_eq "hook silent on second run" "$HOUT2" ""
+echo "== hook: ignores stale finished jobs =="
+reset_store
+ID="$(cd "$WORK" && MOCK_STREAM=1 "$SCRIPTS/delegate.sh" --foreground -- "old task")"
+touch -t "$(date -v-2H +%Y%m%d%H%M 2>/dev/null || date -d '2 hours ago' +%Y%m%d%H%M)" \
+  "$CURSOR_PLUGIN_HOME/jobs/$ID/status"
+HSTALE="$(printf '%s' "$HIN" | CURSOR_PLUGIN_NOTIFY_DESKTOP=0 CURSOR_PLUGIN_NOTIFY_WINDOW_MIN=30 "$HOOK" 2>/dev/null)"
+assert_eq "hook ignores stale job" "$HSTALE" ""
 
 echo "== cancel running job =="
 reset_store

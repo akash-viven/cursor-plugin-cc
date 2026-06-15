@@ -111,6 +111,15 @@ finalize_job() {
   printf '%s' "$result" > "$dir/result.txt"
   [ -n "$session" ] && printf '%s' "$session" > "$dir/session_id"
   [ -n "$duration" ] && printf '%s' "$duration" > "$dir/duration_ms"
+  # Token/cost accounting. cursor-agent's field naming has drifted across
+  # versions, so accept snake_case, camelCase, and prompt/completion aliases.
+  local tin tout cost
+  tin="$(printf  '%s' "$obj" | jq -r '(.usage.input_tokens  // .usage.inputTokens  // .usage.prompt_tokens)     // empty')"
+  tout="$(printf '%s' "$obj" | jq -r '(.usage.output_tokens // .usage.outputTokens // .usage.completion_tokens) // empty')"
+  cost="$(printf '%s' "$obj" | jq -r '(.usage.total_cost_usd // .usage.cost_usd // .total_cost_usd // .cost_usd) // empty')"
+  [ -n "$tin" ]  && printf '%s' "$tin"  > "$dir/tokens_in"
+  [ -n "$tout" ] && printf '%s' "$tout" > "$dir/tokens_out"
+  [ -n "$cost" ] && printf '%s' "$cost" > "$dir/cost_usd"
   if [ "$is_err" = "true" ]; then
     printf 'failed' > "$dir/status"
   else
@@ -165,15 +174,49 @@ job_tool_count() {
   printf '%s' "${n:-0}"
 }
 
-# Distinct files written/edited (from completed edit/write/create tool calls).
+# Humanize a token count: 940 -> "940", 1234 -> "1.2k", 2300000 -> "2.3M".
+fmt_tokens() {
+  local n="${1:-0}"
+  case "$n" in ''|*[!0-9]*) printf '%s' "$n"; return;; esac
+  if [ "$n" -lt 1000 ]; then printf '%s' "$n"; return; fi
+  awk -v n="$n" 'BEGIN{ if (n<1000000) printf "%.1fk", n/1000; else printf "%.1fM", n/1000000 }'
+}
+
+# One-line usage summary: "1.2k → 340 tok · $0.0123", or "" when nothing recorded.
+job_usage_line() {
+  local id="$1" ti to co s=""
+  ti="$(job_field "$id" tokens_in)"
+  to="$(job_field "$id" tokens_out)"
+  co="$(job_field "$id" cost_usd)"
+  if [ -n "$ti" ] || [ -n "$to" ]; then
+    s="$(fmt_tokens "${ti:-0}") → $(fmt_tokens "${to:-0}") tok"
+  fi
+  if [ -n "$co" ]; then
+    [ -n "$s" ] && s="$s · "
+    s="${s}\$$co"
+  fi
+  printf '%s' "$s"
+}
+
+# Distinct files a job wrote/edited. Models differ wildly in HOW they mutate
+# files: dedicated edit/write/create tools (varied arg keys), or plain shell
+# commands with `>`/`>>`/`tee` redirects. We harvest paths from both so the
+# changed-files view isn't blank for shell-driven agents.
 job_changed_files() {
   jq -r '
     select(.type=="tool_call" and .subtype=="completed")
     | .tool_call as $tc
     | ($tc | keys_unsorted[] | select(endswith("ToolCall"))) as $k
-    | select($k | test("edit|write|create|delete|move"; "i"))
-    | $tc[$k].args.path // empty
-  ' "$(job_dir "$1")/output.json" 2>/dev/null | awk 'NF' | awk '!seen[$0]++'
+    | $tc[$k] as $call
+    | if ($k | test("edit|write|create|delete|move|apply|patch"; "i")) then
+        ($call.args.path // $call.args.target_file // $call.args.file
+          // $call.args.filePath // $call.args.relativePath // empty)
+      elif ($k | test("shell|terminal|bash|exec|command|run"; "i")) then
+        (($call.args.command // "")
+          | scan("(?:>>?|\\btee)\\s+\"?([^\\s;|&>\"'"'"']+)") | .[0])
+      else empty end
+  ' "$(job_dir "$1")/output.json" 2>/dev/null \
+    | awk 'NF' | awk '!seen[$0]++'
 }
 
 # Render the activity timeline as pretty lines, in stream order.
