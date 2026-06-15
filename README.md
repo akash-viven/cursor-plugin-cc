@@ -68,6 +68,12 @@ From Claude Code, add the marketplace then install the plugin:
 
 Update later with `/plugin marketplace update akash-viven`.
 
+If commands don't show up after install or update, refresh the plugin runtime:
+
+```
+/reload-plugins
+```
+
 Then run `/cursor:setup`. Requires `cursor-agent` (https://cursor.com/cli) and `jq`.
 
 ## Configuration (env)
