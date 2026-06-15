@@ -158,8 +158,11 @@ job_elapsed() {
 
 # Number of tool calls started so far.
 job_tool_count() {
-  jq -rc 'select(.type=="tool_call" and .subtype=="started")' \
-    "$(job_dir "$1")/output.json" 2>/dev/null | grep -c . || printf '0'
+  local n
+  # grep -c prints 0 and exits 1 on no match; swallow that so we don't double up.
+  n="$(jq -rc 'select(.type=="tool_call" and .subtype=="started")' \
+    "$(job_dir "$1")/output.json" 2>/dev/null | grep -c . || true)"
+  printf '%s' "${n:-0}"
 }
 
 # Distinct files written/edited (from completed edit/write/create tool calls).
