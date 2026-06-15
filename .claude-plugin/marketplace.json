@@ -1,0 +1,24 @@
+{
+  "name": "akash-viven",
+  "owner": {
+    "name": "Akash Solanki",
+    "email": "akashsolanki804@gmail.com"
+  },
+  "metadata": {
+    "description": "Plugins by Akash Solanki for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "cursor",
+      "source": "./plugins/cursor",
+      "description": "Hand off coding tasks from Claude Code to the Cursor CLI (cursor-agent) as tracked background jobs. Includes /cursor:delegate, status, result, cancel, resume, setup, and a cursor-rescue subagent.",
+      "version": "0.1.0",
+      "category": "automation",
+      "tags": ["cursor", "cursor-agent", "handoff", "delegate", "background", "subagent"],
+      "author": {
+        "name": "Akash Solanki"
+      },
+      "license": "Apache-2.0"
+    }
+  ]
+}
