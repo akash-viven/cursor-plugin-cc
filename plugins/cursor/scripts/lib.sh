@@ -82,6 +82,23 @@ job_status() {
   fi
 }
 
+# Scope root for "jobs relevant here": the git repo root of PWD, else PWD.
+# The job store is global (one store for all repos), so listings filter by
+# this so a job running in another repo/folder doesn't show up here.
+job_scope_root() {
+  git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$PWD"
+}
+
+# True if a job's recorded cwd is the given root or sits under it. Trailing
+# slashes make this a true path-prefix test (/a does not match /ab).
+job_in_scope() {
+  local id="$1" root="$2" cwd
+  cwd="$(job_field "$id" cwd)"
+  [ -n "$cwd" ] || return 1
+  case "$cwd/" in "$root/"*) return 0;; esac
+  return 1
+}
+
 # Parse the captured cursor-agent output into terminal job files.
 # We drive cursor-agent with --output-format stream-json: an NDJSON stream of
 # events ending in a single {"type":"result",...} object. Plain single-object

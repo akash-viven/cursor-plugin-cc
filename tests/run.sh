@@ -105,7 +105,7 @@ PFX="${ID%%-*}"
 assert_contains "resolve by prefix" "$("$SCRIPTS/result.sh" "$PFX")" "done"
 
 echo "== status list + json result =="
-assert_contains "status header" "$("$SCRIPTS/status.sh")" "cursor jobs"
+assert_contains "status header" "$(cd "$WORK" && "$SCRIPTS/status.sh")" "cursor jobs"
 assert_contains "result --json raw" "$("$SCRIPTS/result.sh" "$ID" --json)" '"type":"result"'
 
 echo "== rich stream-json: live progress helpers =="
@@ -188,12 +188,31 @@ echo "== statusline: running vs idle =="
 reset_store
 ID="$(cd "$WORK" && MOCK_SLEEP=5 "$SCRIPTS/delegate.sh" -- "long one")"
 sleep 0.3
-SL="$(printf '{}' | "$SCRIPTS/statusline.sh" 2>/dev/null)"
+SL="$(cd "$WORK" && printf '{}' | "$SCRIPTS/statusline.sh" 2>/dev/null)"
 assert_contains "statusline shows running" "$SL" "cursor"
 "$SCRIPTS/cancel.sh" "$ID" >/dev/null 2>&1 || true
 reset_store
 SL_IDLE="$(printf '{}' | "$SCRIPTS/statusline.sh" 2>/dev/null)"
 assert_eq "statusline idle is empty" "$SL_IDLE" ""
+
+echo "== scope: jobs filtered by repo/folder (global store) =="
+reset_store
+OTHER="$(mktemp -d)"
+IDH="$(cd "$WORK"  && MOCK_STREAM=1 "$SCRIPTS/delegate.sh" --foreground -- "here job")"
+IDO="$(cd "$OTHER" && MOCK_STREAM=1 "$SCRIPTS/delegate.sh" --foreground -- "other job")"
+HERE="$(cd "$WORK" && "$SCRIPTS/status.sh")"
+assert_contains "scoped list shows here job"   "$HERE" "here job"
+case "$HERE" in *"other job"*) bad "scoped list hides other job";; *) ok "scoped list hides other job";; esac
+assert_contains "scoped list notes elsewhere"  "$HERE" "other folder"
+ALLV="$(cd "$WORK" && "$SCRIPTS/status.sh" --all)"
+assert_contains "--all shows other job"        "$ALLV" "other job"
+# Statusline in the other folder must not count the here-folder running job.
+reset_store
+IDR="$(cd "$WORK" && MOCK_SLEEP=5 "$SCRIPTS/delegate.sh" -- "long here")"; sleep 0.3
+SLO="$(cd "$OTHER" && printf '{}' | "$SCRIPTS/statusline.sh" 2>/dev/null)"
+assert_eq "statusline empty in other folder" "$SLO" ""
+"$SCRIPTS/cancel.sh" "$IDR" >/dev/null 2>&1 || true
+rm -rf "$OTHER"
 
 echo "== hook: announces newly-finished jobs =="
 reset_store

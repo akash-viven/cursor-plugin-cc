@@ -69,22 +69,51 @@ print_card() {
   printf '\n'
 }
 
-if [ $# -ge 1 ]; then
-  id="$(resolve_job_id "$1")"
+ALL=0
+ARG=""
+for a in "$@"; do
+  case "$a" in --all|-a) ALL=1;; *) ARG="$a";; esac
+done
+
+if [ -n "$ARG" ]; then
+  id="$(resolve_job_id "$ARG")"
   print_card "$id"
   exit 0
 fi
 
 shopt -s nullglob
-jobs=("$JOBS_DIR"/*/)
-if [ "${#jobs[@]}" -eq 0 ]; then
+all_jobs=("$JOBS_DIR"/*/)
+if [ "${#all_jobs[@]}" -eq 0 ]; then
   printf '\n  %s\n\n' "$(dim 'no jobs yet — start one with /cursor:delegate <task>')"
   exit 0
 fi
 
-printf '\n  %s\n\n' "$(bold 'cursor jobs')"
-# Sort by id descending => newest first (ids are epoch-prefixed).
-for d in $(printf '%s\n' "${jobs[@]}" | xargs -n1 basename | sort -r); do
+# Default to jobs for the current repo/folder; --all shows every repo's jobs.
+ROOT="$(job_scope_root)"
+ids=(); elsewhere=0
+for d in $(printf '%s\n' "${all_jobs[@]}" | xargs -n1 basename | sort -r); do
+  if [ "$ALL" -eq 1 ] || job_in_scope "$d" "$ROOT"; then
+    ids+=("$d")
+  else
+    elsewhere=$((elsewhere + 1))
+  fi
+done
+
+if [ "${#ids[@]}" -eq 0 ]; then
+  printf '\n  %s\n' "$(dim 'no jobs for this repo')"
+  [ "$elsewhere" -gt 0 ] && printf '  %s\n' "$(dim "$elsewhere job(s) in other folders — /cursor:status --all to see them")"
+  printf '\n'
+  exit 0
+fi
+
+if [ "$ALL" -eq 1 ]; then
+  printf '\n  %s\n\n' "$(bold 'cursor jobs · all folders')"
+else
+  printf '\n  %s\n\n' "$(bold 'cursor jobs · this repo')"
+fi
+for d in "${ids[@]}"; do
   print_row "$d"
 done
+[ "$ALL" -eq 0 ] && [ "$elsewhere" -gt 0 ] \
+  && printf '\n  %s' "$(dim "$elsewhere more in other folders — /cursor:status --all")"
 printf '\n  %s\n\n' "$(dim 'detail: /cursor:status <id>   ·   result: /cursor:result <id>')"

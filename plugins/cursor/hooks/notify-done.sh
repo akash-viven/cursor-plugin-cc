@@ -24,10 +24,16 @@ LIB="$HOOKS_DIR/../scripts/lib.sh"
 # back correctly in hookSpecificOutput) — best effort, default to "Stop".
 INPUT="$(cat 2>/dev/null || true)"
 EVENT="Stop"
+HOOK_CWD="$PWD"
 if command -v jq >/dev/null 2>&1 && [ -n "$INPUT" ]; then
   e="$(printf '%s' "$INPUT" | jq -r '.hook_event_name // empty' 2>/dev/null || true)"
   [ -n "$e" ] && EVENT="$e"
+  cw="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)"
+  [ -n "$cw" ] && HOOK_CWD="$cw"
 fi
+# Announce only jobs belonging to this session's repo/folder — the store is
+# global, so without this a job finishing in another repo would surface here.
+SCOPE_ROOT="$(git -C "$HOOK_CWD" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$HOOK_CWD")"
 
 WINDOW_MIN="${CURSOR_PLUGIN_NOTIFY_WINDOW_MIN:-30}"
 case "$WINDOW_MIN" in ''|*[!0-9]*) WINDOW_MIN=30;; esac
@@ -50,6 +56,7 @@ _scan() {
       done|failed|crashed|cancelled) ;;
       *) continue;;
     esac
+    job_in_scope "$id" "$SCOPE_ROOT" || continue
     [ -f "$d/announced" ] && continue
     # Only announce jobs that finished recently (status file freshly written).
     if [ -z "$(find "$d/status" -mmin "-$WINDOW_MIN" 2>/dev/null)" ]; then

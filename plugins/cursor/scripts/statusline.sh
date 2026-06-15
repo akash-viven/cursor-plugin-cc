@@ -21,11 +21,15 @@ cat >/dev/null 2>&1 || true   # drain the statusLine JSON on stdin, unused
 ensure_store
 shopt -s nullglob
 
+# Only count jobs that belong to the current repo/folder — the store is global.
+ROOT="$(job_scope_root)"
+
 running=0
 max_el=0
 for d in "$JOBS_DIR"/*/; do
   id="$(basename "$d")"
   [ "$(job_status "$id")" = "running" ] || continue
+  job_in_scope "$id" "$ROOT" || continue
   running=$((running + 1))
   el="$(job_elapsed "$id")"
   case "$el" in ''|*[!0-9]*) el=0;; esac
