@@ -12,7 +12,7 @@
       "name": "cursor",
       "source": "./plugins/cursor",
       "description": "Hand off coding tasks from Claude Code to the Cursor CLI (cursor-agent) as tracked background jobs. Includes /cursor:delegate, status, result, diff, cancel, resume, setup, a completion hook, an optional statusline, and a cursor-rescue subagent.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "automation",
       "tags": ["cursor", "cursor-agent", "handoff", "delegate", "background", "subagent"],
       "author": {
