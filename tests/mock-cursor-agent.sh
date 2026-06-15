@@ -6,7 +6,9 @@
 #   MOCK_SLEEP     seconds to sleep before emitting (default 0)
 #   MOCK_EXIT      process exit code (default 0)
 #   MOCK_NOOUT     if "1", print nothing (simulate no output)
-#   MOCK_STREAM    if "1", emit stream-json (multiple lines)
+#   MOCK_STREAM    if "1", emit rich stream-json (init/assistant/tool_call/result)
+#   MOCK_MODEL     model name in the init event (default "Composer 2.5 Fast")
+#   MOCK_FILE      path used by the mocked edit tool_call (default "src/auth.ts")
 #   MOCK_VERSION   version string for --version (default "mock 1.2.3")
 #   MOCK_NOAUTH    if "1", --list-models fails (simulate logged out)
 #   MOCK_ARGS_FILE if set, append the raw argv (one per line, NUL-free) here
@@ -35,9 +37,18 @@ session="${MOCK_SESSION:-sess-xyz}"
 is_error="${MOCK_IS_ERROR:-false}"
 
 if [ "${MOCK_STREAM:-0}" = "1" ]; then
-  printf '%s\n' '{"type":"assistant","text":"working..."}'
-  printf '{"type":"result","subtype":"success","is_error":%s,"result":%s,"session_id":%s}\n' \
-    "$is_error" "$(printf '%s' "$result" | jq -R .)" "$(printf '%s' "$session" | jq -R .)"
+  model="${MOCK_MODEL:-Composer 2.5 Fast}"
+  file="${MOCK_FILE:-src/auth.ts}"
+  jq -cn --arg s "$session" --arg m "$model" \
+    '{type:"system",subtype:"init",session_id:$s,model:$m}'
+  jq -cn '{type:"assistant",message:{role:"assistant",content:[{type:"text",text:"Reading the file now."}]}}'
+  jq -cn --arg p "$file" '{type:"tool_call",subtype:"started",tool_call:{readToolCall:{args:{path:$p}}}}'
+  jq -cn --arg p "$file" '{type:"tool_call",subtype:"completed",tool_call:{readToolCall:{args:{path:$p},result:{success:{}}}}}'
+  jq -cn '{type:"assistant",message:{role:"assistant",content:[{type:"text",text:"Converting to async/await."}]}}'
+  jq -cn --arg p "$file" '{type:"tool_call",subtype:"started",tool_call:{editToolCall:{args:{path:$p}}}}'
+  jq -cn --arg p "$file" '{type:"tool_call",subtype:"completed",tool_call:{editToolCall:{args:{path:$p},result:{success:{linesAdded:4}}}}}'
+  jq -cn --arg r "$result" --arg s "$session" --argjson e "$is_error" \
+    '{type:"result",subtype:"success",is_error:$e,result:$r,session_id:$s,duration_ms:1234}'
 else
   printf '{"type":"result","subtype":"success","is_error":%s,"result":%s,"session_id":%s,"usage":{"inputTokens":1}}\n' \
     "$is_error" "$(printf '%s' "$result" | jq -R .)" "$(printf '%s' "$session" | jq -R .)"

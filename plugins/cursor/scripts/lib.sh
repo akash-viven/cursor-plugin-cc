@@ -82,9 +82,10 @@ job_status() {
   fi
 }
 
-# Parse the captured cursor-agent JSON output into terminal job files.
-# cursor-agent --output-format json emits one object:
-#   {"type":"result","is_error":bool,"result":"...","session_id":"..."}
+# Parse the captured cursor-agent output into terminal job files.
+# We drive cursor-agent with --output-format stream-json: an NDJSON stream of
+# events ending in a single {"type":"result",...} object. Plain single-object
+# json is still tolerated for forward/backward compatibility.
 finalize_job() {
   local id="$1" dir out
   dir="$(job_dir "$id")"
@@ -94,7 +95,6 @@ finalize_job() {
     printf 'no output captured from cursor-agent\n' > "$dir/result.txt"
     return 0
   fi
-  # Tolerate either a single json object or stream-json (take last result line).
   local obj
   obj="$(jq -c 'select(.type=="result")' "$out" 2>/dev/null | tail -n1 || true)"
   if [ -z "$obj" ]; then
@@ -103,17 +103,159 @@ finalize_job() {
     cp "$out" "$dir/result.txt"
     return 0
   fi
-  local is_err result session
+  local is_err result session duration
   is_err="$(printf '%s' "$obj" | jq -r '.is_error // false')"
   result="$(printf '%s' "$obj" | jq -r '.result // ""')"
   session="$(printf '%s' "$obj" | jq -r '.session_id // ""')"
+  duration="$(printf '%s' "$obj" | jq -r '.duration_ms // empty')"
   printf '%s' "$result" > "$dir/result.txt"
   [ -n "$session" ] && printf '%s' "$session" > "$dir/session_id"
+  [ -n "$duration" ] && printf '%s' "$duration" > "$dir/duration_ms"
   if [ "$is_err" = "true" ]; then
     printf 'failed' > "$dir/status"
   else
     printf 'done' > "$dir/status"
   fi
+}
+
+# ── live-progress helpers ─────────────────────────────────────────────────
+# These read the streaming output.json on demand (no daemon). Safe to call
+# while a job is running — they tolerate partial/truncated trailing lines.
+
+# Session id: prefer the finalized file, else the init event from the stream.
+job_session() {
+  local id="$1" s; s="$(job_field "$id" session_id)"
+  if [ -z "$s" ]; then
+    s="$(jq -r 'select(.type=="system" and .subtype=="init").session_id' \
+      "$(job_dir "$id")/output.json" 2>/dev/null | head -n1)"
+  fi
+  printf '%s' "$s"
+}
+
+# Model name reported by the init event (else the stored --model, else default).
+job_model() {
+  local id="$1" m
+  m="$(jq -r 'select(.type=="system" and .subtype=="init").model // empty' \
+    "$(job_dir "$id")/output.json" 2>/dev/null | head -n1)"
+  [ -n "$m" ] || m="$(job_field "$id" model)"
+  [ -n "$m" ] || m="(default)"
+  printf '%s' "$m"
+}
+
+# Elapsed seconds: now-started while running; stored duration when finished.
+job_elapsed() {
+  local id="$1" started dur now
+  if [ "$(job_status "$id")" = "running" ]; then
+    started="$(job_field "$id" started)"
+    [ -n "$started" ] || { printf '0'; return; }
+    now="$(date +%s)"
+    printf '%s' "$((now - started))"
+  else
+    dur="$(job_field "$id" duration_ms)"
+    if [ -n "$dur" ]; then printf '%s' "$((dur / 1000))"; else printf '0'; fi
+  fi
+}
+
+# Number of tool calls started so far.
+job_tool_count() {
+  jq -rc 'select(.type=="tool_call" and .subtype=="started")' \
+    "$(job_dir "$1")/output.json" 2>/dev/null | grep -c . || printf '0'
+}
+
+# Distinct files written/edited (from completed edit/write/create tool calls).
+job_changed_files() {
+  jq -r '
+    select(.type=="tool_call" and .subtype=="completed")
+    | .tool_call as $tc
+    | ($tc | keys_unsorted[] | select(endswith("ToolCall"))) as $k
+    | select($k | test("edit|write|create|delete|move"; "i"))
+    | $tc[$k].args.path // empty
+  ' "$(job_dir "$1")/output.json" 2>/dev/null | awk 'NF' | awk '!seen[$0]++'
+}
+
+# Render the activity timeline as pretty lines, in stream order.
+#   💬  assistant text   |   🔧  <tool>  <file>
+# Optional arg: tail to the last N events.
+job_activity() {
+  local id="$1" n="${2:-0}" out
+  out="$(job_dir "$id")/output.json"
+  [ -s "$out" ] || return 0
+  # Render display lines entirely in jq (emoji + tool + basename), so the shell
+  # only needs a plain whole-line read — robust across shells and IFS settings.
+  local lines
+  lines="$(jq -r '
+    select(
+      (.type=="assistant") or
+      (.type=="tool_call" and .subtype=="started")
+    )
+    | if .type=="assistant" then
+        ([.message.content[]? | select(.type=="text") | .text] | join(" ")) as $t
+        | select(($t | gsub("\\s";"")) != "")
+        | "\ud83d\udcac  " + ($t | gsub("\\s+";" ") | gsub("^ | $";""))
+      else
+        (.tool_call | keys_unsorted[] | select(endswith("ToolCall"))) as $k
+        | ((.tool_call[$k].args.path // "") | split("/") | last) as $f
+        | "\ud83d\udd27  " + ($k | sub("ToolCall$";""))
+          + (if $f != "" then "  " + $f else "" end)
+      end
+  ' "$out" 2>/dev/null)" || return 0
+  [ -n "$lines" ] || return 0
+  if [ "$n" -gt 0 ]; then lines="$(printf '%s\n' "$lines" | tail -n "$n")"; fi
+  printf '%s\n' "$lines" | while IFS= read -r line; do _trunc_line "$line"; done
+}
+
+# Truncate a display line to ~66 visible chars.
+_trunc_line() {
+  local s="$1" max=66
+  if [ "${#s}" -gt "$max" ]; then printf '%s…\n' "${s:0:max}"; else printf '%s\n' "$s"; fi
+}
+
+# Spinner frame chosen from elapsed seconds (deterministic, no timers).
+spinner_frame() {
+  local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i
+  i=$(( ${1:-0} % 10 ))
+  printf '%s' "$(printf '%s' "$frames" | cut -c $((i+1)))"
+}
+
+# Human elapsed: "45s", "1m 23s", "2h 4m".
+fmt_elapsed() {
+  local s="${1:-0}" h m
+  if [ "$s" -lt 60 ]; then printf '%ds' "$s"; return; fi
+  if [ "$s" -lt 3600 ]; then printf '%dm %ds' "$((s/60))" "$((s%60))"; return; fi
+  h=$((s/3600)); m=$(((s%3600)/60)); printf '%dh %dm' "$h" "$m"
+}
+
+# Color helpers. Honor NO_COLOR; disable when stdout is not a tty.
+_supports_color() { [ -z "${NO_COLOR:-}" ] && [ -t 1 ]; }
+c() { # c <code> <text>
+  if _supports_color; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi
+}
+dim()  { c '2'  "$1"; }
+bold() { c '1'  "$1"; }
+# Color a status word by its semantics.
+status_color() {
+  local st="$1" code
+  case "$st" in
+    running)   code='36';;  # cyan
+    done)      code='32';;  # green
+    failed)    code='31';;  # red
+    crashed)   code='31';;  # red
+    cancelled) code='33';;  # yellow
+    *)         code='2';;   # dim
+  esac
+  c "$code" "$st"
+}
+
+# Status -> glyph.
+status_icon() {
+  case "$1" in
+    running)   printf '◐';;
+    done)      printf '✓';;
+    failed)    printf '✗';;
+    cancelled) printf '⊘';;
+    crashed)   printf '!';;
+    *)         printf '·';;
+  esac
 }
 
 # Recursively TERM a pid and all its descendants (depth-first, children first).

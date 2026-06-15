@@ -5,9 +5,12 @@ allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/status.sh:*)
 ---
 
 Show running and recent Cursor jobs (also prunes finished jobs older than 7 days).
+With no argument, prints the job list. With an `id`, prints a live card: status,
+elapsed time, model, recent activity, tool calls, and changed files.
 
 ```
 ${CLAUDE_PLUGIN_ROOT}/scripts/status.sh $ARGUMENTS
 ```
 
-Relay the table to the user. Status values: running, done, failed, cancelled, crashed.
+Relay the output to the user. Status values: running, done, failed, cancelled, crashed.
+For a running job, the user can re-run `/cursor:status <id>` to refresh live progress.

@@ -14,7 +14,7 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/delegate.sh $ARGUMENTS
 ```
 
 The script prints a job id. Tell the user the id and that they can:
-- check progress with `/cursor:status`
+- watch live progress with `/cursor:status <id>` (activity, tool calls, changed files)
 - read the result with `/cursor:result <id>`
 - stop it with `/cursor:cancel <id>`
 

@@ -36,10 +36,12 @@ mkdir -p "$JD"
 printf '%s' "$PWD"    > "$JD/cwd"
 printf '%s' "$PROMPT" > "$JD/prompt"
 printf '%s' "$MODEL"  > "$JD/model"
+printf '%s' "$(date +%s)" > "$JD/started"
 printf 'running'      > "$JD/status"
 
 # Build the cursor-agent argv. Headless + unattended posture (see README).
-AGENT_ARGS=(-p "$PROMPT" --output-format json --force --trust --sandbox disabled --workspace "$PWD")
+# stream-json => NDJSON events land in output.json live, enabling progress view.
+AGENT_ARGS=(-p "$PROMPT" --output-format stream-json --force --trust --sandbox disabled --workspace "$PWD")
 [ -n "$MODEL" ] && AGENT_ARGS+=(--model "$MODEL")
 [ "$WORKTREE" -eq 1 ] && AGENT_ARGS+=(--worktree)
 

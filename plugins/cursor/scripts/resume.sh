@@ -41,9 +41,10 @@ printf '%s' "$PROMPT"  > "$JD/prompt"
 printf '%s' "$MODEL"   > "$JD/model"
 printf '%s' "$session" > "$JD/resumed_from_session"
 printf '%s' "$SRC_ID"  > "$JD/resumed_from_job"
+printf '%s' "$(date +%s)" > "$JD/started"
 printf 'running'       > "$JD/status"
 
-AGENT_ARGS=(--resume "$session" -p "$PROMPT" --output-format json --force --trust --sandbox disabled --workspace "$src_cwd")
+AGENT_ARGS=(--resume "$session" -p "$PROMPT" --output-format stream-json --force --trust --sandbox disabled --workspace "$src_cwd")
 [ -n "$MODEL" ] && AGENT_ARGS+=(--model "$MODEL")
 
 run_job() {

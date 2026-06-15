@@ -28,11 +28,14 @@ WORK="$SANDBOX/repo"; mkdir -p "$WORK"
 
 reset_store() { rm -rf "$CURSOR_PLUGIN_HOME"; mkdir -p "$CURSOR_PLUGIN_HOME/jobs"; }
 
+# Read a job's live status via lib (subshell isolates lib's set -e/pipefail).
+jstatus() { ( . "$SCRIPTS/lib.sh"; job_status "$1" ); }
+
 # Wait until a job leaves 'running' or timeout (~10s).
 wait_done() {
   local id="$1" i st
   for i in $(seq 1 50); do
-    st="$("$SCRIPTS/status.sh" "$id" 2>/dev/null | tail -n1 | awk '{print $2}')"
+    st="$(jstatus "$id")"
     case "$st" in running|"") sleep 0.2;; *) printf '%s' "$st"; return 0;; esac
   done
   printf '%s' "timeout"
@@ -86,13 +89,14 @@ assert_eq "stream status=done"   "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/status")" 
 echo "== delegate (background) + status + result =="
 reset_store
 ID="$(cd "$WORK" && MOCK_SLEEP=1 MOCK_RESULT="bg done" "$SCRIPTS/delegate.sh" -- "bg task")"
-st_now="$("$SCRIPTS/status.sh" "$ID" | tail -n1 | awk '{print $2}')"
+st_now="$(jstatus "$ID")"
 assert_eq "background starts running" "$st_now" "running"
+assert_file "started timestamp written" "$CURSOR_PLUGIN_HOME/jobs/$ID/started"
 final="$(wait_done "$ID")"
 assert_eq "background reaches done" "$final" "done"
 RES="$("$SCRIPTS/result.sh" "$ID")"
 assert_contains "result shows text"    "$RES" "bg done"
-assert_contains "result shows session" "$RES" "session:"
+assert_contains "result shows session" "$RES" "session"
 
 echo "== prefix id resolution =="
 reset_store
@@ -101,8 +105,34 @@ PFX="${ID%%-*}"
 assert_contains "resolve by prefix" "$("$SCRIPTS/result.sh" "$PFX")" "done"
 
 echo "== status list + json result =="
-assert_contains "status header" "$("$SCRIPTS/status.sh")" "JOB ID"
+assert_contains "status header" "$("$SCRIPTS/status.sh")" "cursor jobs"
 assert_contains "result --json raw" "$("$SCRIPTS/result.sh" "$ID" --json)" '"type":"result"'
+
+echo "== rich stream-json: live progress helpers =="
+reset_store
+ID="$(cd "$WORK" && MOCK_STREAM=1 MOCK_MODEL="Composer 2.5 Fast" MOCK_FILE="src/auth.ts" \
+  MOCK_SESSION="sess-rich" MOCK_RESULT="refactored" "$SCRIPTS/delegate.sh" --foreground -- "refactor")"
+assert_eq "stream status=done"     "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/status")" "done"
+assert_eq "stream result parsed"   "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/result.txt")" "refactored"
+assert_eq "duration_ms captured"   "$(cat "$CURSOR_PLUGIN_HOME/jobs/$ID/duration_ms")" "1234"
+assert_eq "model from init event"  "$( . "$SCRIPTS/lib.sh"; job_model "$ID")" "Composer 2.5 Fast"
+assert_eq "session from init/file" "$( . "$SCRIPTS/lib.sh"; job_session "$ID")" "sess-rich"
+assert_eq "tool count = 2"         "$( . "$SCRIPTS/lib.sh"; job_tool_count "$ID")" "2"
+assert_contains "changed files"    "$( . "$SCRIPTS/lib.sh"; job_changed_files "$ID")" "src/auth.ts"
+ACT="$( . "$SCRIPTS/lib.sh"; job_activity "$ID")"
+assert_contains "activity has assistant text" "$ACT" "Converting to async/await"
+assert_contains "activity has tool line"      "$ACT" "auth.ts"
+RES="$("$SCRIPTS/result.sh" "$ID")"
+assert_contains "result shows changed files" "$RES" "src/auth.ts"
+assert_contains "result shows activity"      "$RES" "Converting to async/await"
+STAT="$("$SCRIPTS/status.sh" "$ID")"
+assert_contains "status card shows model" "$STAT" "Composer 2.5 Fast"
+
+echo "== fmt_elapsed + duration as elapsed =="
+assert_eq "fmt 45s"      "$( . "$SCRIPTS/lib.sh"; fmt_elapsed 45)"   "45s"
+assert_eq "fmt 1m 23s"   "$( . "$SCRIPTS/lib.sh"; fmt_elapsed 83)"   "1m 23s"
+assert_eq "fmt 2h 4m"    "$( . "$SCRIPTS/lib.sh"; fmt_elapsed 7440)" "2h 4m"
+assert_eq "elapsed from duration" "$( . "$SCRIPTS/lib.sh"; job_elapsed "$ID")" "1"
 
 echo "== cancel running job =="
 reset_store

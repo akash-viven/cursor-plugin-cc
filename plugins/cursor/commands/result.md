@@ -10,4 +10,6 @@ Print the final output of a finished Cursor job, plus its session id for resumin
 ${CLAUDE_PLUGIN_ROOT}/scripts/result.sh $ARGUMENTS
 ```
 
-If the job is still running, tell the user to wait and re-check with `/cursor:status`.
+The output includes any changed files, an activity summary, the result text, and
+the session id for resuming. If the job is still running, tell the user to watch
+live progress with `/cursor:status <id>`.

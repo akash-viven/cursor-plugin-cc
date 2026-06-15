@@ -22,10 +22,11 @@ You ──▶ Claude Code ──/cursor:delegate──▶ cursor-agent (backgrou
 ```
 
 - 🚀 **Background handoff** — fire a task, keep working; Claude polls and reports.
+- 📊 **Live progress** — watch a running job's activity, tool calls, and changed files as it works.
 - 📋 **Job tracking** — `status` / `result` / `cancel` across every repo.
 - 🔁 **Resumable** — continue a Cursor session with new instructions.
 - 🤖 **Self-rescue** — a `cursor-rescue` subagent Claude can invoke when stuck.
-- 🧪 **Tested** — 38 mocked tests + opt-in live smoke test, CI on every push.
+- 🧪 **Tested** — 55 mocked tests + opt-in live smoke test, CI on every push.
 
 ---
 
@@ -87,8 +88,9 @@ Verify everything is wired up:
 # 1. Hand a task to Cursor (returns a job id, runs in the background)
 /cursor:delegate refactor src/auth.ts to use async/await and add tests
 
-# 2. Check progress (run from any repo)
+# 2. Check progress — bare for the list, or pass an id for a live card
 /cursor:status
+/cursor:status <id>      # activity timeline, tool calls, changed files, elapsed
 
 # 3. Read the result once it's done
 /cursor:result <id>
@@ -106,7 +108,7 @@ Job ids accept a **unique prefix** — `/cursor:result 1718` works if it's unamb
 | Command | What it does |
 |---------|--------------|
 | `/cursor:delegate <task>` | Hand a task to cursor-agent as a background job. Prints a job id. |
-| `/cursor:status [id]` | List jobs and status. Prunes finished jobs older than 7 days. |
+| `/cursor:status [id]` | List jobs, or pass an id for a live card (activity, tool calls, changed files, elapsed). Prunes finished jobs older than 7 days. |
 | `/cursor:result <id>` | Show a finished job's output + session id. `--json` for raw. |
 | `/cursor:cancel <id>` | Stop a running job. |
 | `/cursor:resume <id> <new instructions>` | Continue a job's session as a new job. |
@@ -123,16 +125,17 @@ A `cursor-rescue` subagent ships alongside, so Claude can self-delegate when it 
 `cursor-agent` has no long-lived daemon, so each handoff is a **detached subprocess**. `delegate.sh` runs:
 
 ```bash
-cursor-agent -p "<task>" --output-format json \
+cursor-agent -p "<task>" --output-format stream-json \
   --force --trust --sandbox disabled --workspace "$PWD"
 ```
 
-…detached, capturing stdout to `output.json`. When it exits, the wrapper parses the result object (`.result`, `.session_id`, `.is_error`) into per-job files.
+…detached, streaming NDJSON events to `output.json` as it works. `/cursor:status <id>` parses that live stream on demand — no daemon, no polling loop — to show the model, elapsed time, recent activity, tool calls, and changed files. When the job exits, the wrapper reads the final `result` event (`.result`, `.session_id`, `.is_error`, `.duration_ms`) into per-job files.
 
 Job state lives in `~/.cursor-plugin/jobs/<id>/`:
 
 ```
-cwd  prompt  model  status  pid  output.json  result.txt  session_id  exit_code  err.log
+cwd  prompt  model  started  status  pid  output.json
+result.txt  session_id  duration_ms  exit_code  err.log
 ```
 
 `status` is one of:
@@ -176,7 +179,7 @@ Environment variables (all optional):
 Pure-bash harness with a mocked `cursor-agent` — no quota used:
 
 ```bash
-tests/run.sh                 # 38 unit + integration tests
+tests/run.sh                 # 55 unit + integration tests
 CURSOR_LIVE=1 tests/run.sh   # also runs one real cursor-agent smoke test
 ```
 

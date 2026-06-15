@@ -23,21 +23,46 @@ if [ "$RAW" -eq 1 ]; then
   exit 0
 fi
 
-case "$st" in
-  running) log "job $id still running. Check /cursor:status or try again."; exit 0;;
-  crashed) log "job $id crashed (process died, no result). See $jd/err.log"; exit 1;;
-esac
+if [ "$st" = "running" ]; then
+  log "job ${id:0:8} still running — /cursor:status ${id:0:8} for live progress"
+  exit 0
+fi
 
-printf '=== job %s [%s] ===\n' "$id" "$st"
-if [ -s "$jd/result.txt" ]; then
-  cat "$jd/result.txt"; printf '\n'
+icon="$(status_icon "$st")"
+el="$(fmt_elapsed "$(job_elapsed "$id")")"
+model="$(job_model "$id")"
+
+printf '\n'
+printf '  %s %s   %s\n' "$icon" "$(status_color "$st")" "$(dim "$el · $model")"
+printf '  %s\n' "$(job_field "$id" prompt | tr '\n' ' ')"
+
+# What it touched, before the prose result.
+files="$(job_changed_files "$id")"
+if [ -n "$files" ]; then
+  printf '\n  %s\n' "$(bold 'changed files')"
+  printf '%s\n' "$files" | while IFS= read -r f; do printf '  %s %s\n' "$(c 32 '+')" "$f"; done
+fi
+
+act="$(job_activity "$id" 8)"
+if [ -n "$act" ]; then
+  printf '\n  %s\n' "$(bold 'activity')"
+  printf '%s\n' "$act" | while IFS= read -r line; do printf '  %s\n' "$(dim "$line")"; done
+fi
+
+printf '\n  %s\n' "$(bold 'result')"
+if [ "$st" = "crashed" ]; then
+  printf '  %s\n' "$(c 31 'process died before writing a result')"
+  [ -s "$jd/err.log" ] && printf '  %s\n' "$(dim "see $jd/err.log")"
+elif [ -s "$jd/result.txt" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do printf '  %s\n' "$line"; done < "$jd/result.txt"
 else
-  log "(no result text captured)"
+  printf '  %s\n' "$(dim '(no result text captured)')"
 fi
 
-session="$(job_field "$id" session_id)"
+session="$(job_session "$id")"
 if [ -n "$session" ]; then
-  printf '\n--- resume this thread ---\n'
-  printf 'session: %s\n' "$session"
-  printf 'continue with: /cursor:resume %s <new instructions>\n' "$id"
+  printf '\n  %s\n' "$(bold 'resume this thread')"
+  printf '  %s %s\n' "$(dim 'session ')" "$session"
+  printf '  %s %s\n' "$(dim 'continue')" "/cursor:resume ${id:0:8} <new instructions>"
 fi
+printf '\n'
