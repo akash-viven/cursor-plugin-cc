@@ -1,6 +1,6 @@
 {
   "name": "cursor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Hand off coding tasks from Claude Code to the Cursor CLI (cursor-agent) as tracked background jobs.",
   "author": {
     "name": "Akash Solanki"
@@ -8,7 +8,5 @@
   "homepage": "https://github.com/akash-viven/cursor-plugin-cc",
   "repository": "https://github.com/akash-viven/cursor-plugin-cc",
   "license": "Apache-2.0",
-  "keywords": ["cursor", "cursor-agent", "handoff", "delegate", "background"],
-  "commands": "./commands",
-  "agents": "./agents"
+  "keywords": ["cursor", "cursor-agent", "handoff", "delegate", "background"]
 }
