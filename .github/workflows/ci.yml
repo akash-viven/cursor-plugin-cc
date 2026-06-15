@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Validate manifests
+        run: |
+          jq . .claude-plugin/marketplace.json > /dev/null
+          jq . plugins/cursor/.claude-plugin/plugin.json > /dev/null
+
+      - name: Syntax-check scripts
+        run: |
+          for f in plugins/cursor/scripts/*.sh tests/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: Run test suite (mocked, no quota)
+        run: bash tests/run.sh

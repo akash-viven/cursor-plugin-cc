@@ -1,0 +1,10 @@
+cursor-plugin-cc
+Copyright 2026 Akash Solanki
+
+This product includes software developed by Akash Solanki.
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+This plugin drives the Cursor CLI (cursor-agent), which is a separate product
+of Anysphere, Inc. and is not covered by this license. It is not affiliated
+with or endorsed by Anysphere or OpenAI.
